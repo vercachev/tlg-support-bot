@@ -44,7 +44,6 @@ async def ask_question(callback: types.CallbackQuery):
 
 @dp.message(F.text, ~F.from_user.id.in_(ADMIN_IDS))
 async def handle_user_question(message: types.Message):
-    # Notify all admins
     for admin_id in ADMIN_IDS:
         try:
             user_info = f"👤 Від: {message.from_user.full_name} (@{message.from_user.username or 'немає'})\nID: `{message.from_user.id}`"
@@ -86,8 +85,11 @@ async def on_startup(bot: Bot):
     if not BASE_WEBHOOK_URL:
         logging.error("WEBHOOK_URL не вказано. Встановіть змінну середовища WEBHOOK_URL.")
         return
-    await bot.set_webhook(f"{BASE_WEBHOOK_URL}/webhook")
-    logging.info("Webhook встановлено")
+    try:
+        await bot.set_webhook(f"{BASE_WEBHOOK_URL}/webhook")
+        logging.info("Webhook встановлено")
+    except Exception as e:
+        logging.exception(f"Не вдалося встановити webhook: {e}")
 
 def main():
     dp.startup.register(on_startup)
