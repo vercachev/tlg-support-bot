@@ -9,7 +9,7 @@ from aiogram.filters import Command
 from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-# Настройка логирования
+# Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,12 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(i.strip()) for i in os.getenv("ADMIN_IDS", "").split(",") if i.strip()]
 BASE_WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://your-service.onrender.com
 PORT = int(os.getenv("PORT", 10000))
-STATE_FILE = "reply_state.json"  # хранит { admin_id: target_user_id }
+
+# Опционально: путь к приветственному изображению (локальный путь в контейнере или публичный URL)
+WELCOME_IMAGE_PATH = os.getenv("WELCOME_IMAGE_PATH", "")
+WELCOME_CAPTION = os.getenv("WELCOME_CAPTION", "Вітаємо! Я допоможу вам отримати консультацію. Оберіть тему вашого питання:")
+
+STATE_FILE = "reply_state.json"  # файл для хранения состояния ответа { admin_id: user_id }
 
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in environment variables")
@@ -26,7 +31,7 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- Утилиты для состояния ответа ---
+# ----------------- Утилиты для состояния ответа -----------------
 def load_state() -> Dict[str, str]:
     try:
         if not os.path.exists(STATE_FILE):
@@ -62,10 +67,10 @@ def get_admin_reply_state(admin_id: int):
     state = load_state()
     return int(state.get(str(admin_id))) if str(admin_id) in state else None
 
-# --- Клавиатуры ---
+# ----------------- Клавиатуры -----------------
 def main_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🙋‍♂️ Задати питання про візовий вступ", callback_data="ask_vstup")],
+        [InlineKeyboardButton(text="🙋‍♂️ Задати питання про вступ до університетів Європи", callback_data="ask_vstup")],
         [InlineKeyboardButton(text="📋 Задати питання про візовий супровід", callback_data="ask_suprovid")]
     ])
     return kb
@@ -77,17 +82,32 @@ def admin_reply_kb(user_id: int):
     ])
     return kb
 
-# --- Хендлеры ---
+# ----------------- Хендлеры -----------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer(
-        "Вітаємо! Я допоможу вам отримати консультацію. Оберіть тему вашого питання:",
-        reply_markup=main_menu()
-    )
+    kb = main_menu()
+    try:
+        if WELCOME_IMAGE_PATH:
+            # Если указан публичный URL
+            if WELCOME_IMAGE_PATH.startswith("http://") or WELCOME_IMAGE_PATH.startswith("https://"):
+                await bot.send_photo(chat_id=message.chat.id, photo=WELCOME_IMAGE_PATH, caption=WELCOME_CAPTION, reply_markup=kb)
+            else:
+                # Локальный файл (например static/welcome.png)
+                if os.path.exists(WELCOME_IMAGE_PATH):
+                    with open(WELCOME_IMAGE_PATH, "rb") as photo:
+                        await bot.send_photo(chat_id=message.chat.id, photo=photo, caption=WELCOME_CAPTION, reply_markup=kb)
+                else:
+                    logger.warning("WELCOME_IMAGE_PATH указан, но файл не найден. Отправляем текст.")
+                    await message.answer(WELCOME_CAPTION, reply_markup=kb)
+        else:
+            await message.answer(WELCOME_CAPTION, reply_markup=kb)
+    except Exception as e:
+        logger.exception(f"Failed to send welcome image: {e}")
+        await message.answer(WELCOME_CAPTION, reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("ask_"))
 async def ask_question(callback: types.CallbackQuery):
-    theme = "візовий вступ" if callback.data == "ask_vstup" else "візовий супровід"
+    theme = "вступ до університетів Європи" if callback.data == "ask_vstup" else "візовий супровід"
     await callback.message.answer(f"Ви обрали тему: *{theme}*.\nБудь ласка, напишіть ваше питання одним повідомленням.", parse_mode="Markdown")
     await callback.answer()
 
@@ -128,10 +148,9 @@ async def start_reply(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("resolve_"))
 async def resolve_question(callback: types.CallbackQuery):
-    """Позначити як вирішено — просто уведомить администратора и очистит состояние, если он был в режиме."""
+    """Позначити як вирішено."""
     admin_id = callback.from_user.id
     target_user_id = int(callback.data.split("_", 1)[1])
-    # если админ был в режиме ответа на этого пользователя — очистим
     current = get_admin_reply_state(admin_id)
     if current == target_user_id:
         pop_admin_reply_state(admin_id)
@@ -140,7 +159,7 @@ async def resolve_question(callback: types.CallbackQuery):
 
 @dp.message(F.text, F.from_user.id.in_(ADMIN_IDS))
 async def admin_text_handler(message: types.Message):
-    """Если админ в режиме ответа — отправляем текст пользователю; иначе — короткое уведомление."""
+    """Если админ в режиме ответа — отправляем текст пользователю; иначе — подсказка."""
     admin_id = message.from_user.id
     target = get_admin_reply_state(admin_id)
     if target:
@@ -154,10 +173,9 @@ async def admin_text_handler(message: types.Message):
         # очистить состояние
         pop_admin_reply_state(admin_id)
     else:
-        # Не в режиме ответа: подсказка
         await message.answer("Ви не обрали користувача для відповіді. Натисніть кнопку 'Відповісти' під питанням, щоб вибрати одержувача.")
 
-# --- Webhook setup ---
+# ----------------- Webhook setup -----------------
 async def on_startup(bot: Bot):
     if not BASE_WEBHOOK_URL:
         logger.error("WEBHOOK_URL не вказано. Встановіть змінну середовища WEBHOOK_URL.")
