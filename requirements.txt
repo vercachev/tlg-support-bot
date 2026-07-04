@@ -1,2 +1,4 @@
 aiogram==3.10.0
-aiohttp
+aiohttp==3.10.1
+pydantic==2.8.2
+pydantic-core==2.20.1
